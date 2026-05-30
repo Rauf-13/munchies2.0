@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "446589487356",
+    "project_id": "munchies-a5aab",
+    "storage_bucket": "munchies-a5aab.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:446589487356:android:178fbcb5c4986be89eef79",
+        "android_client_info": {
+          "package_name": "com.example.foodapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHnlw9ebGDbuxYJruQ3wq-pufMu9tn54U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
