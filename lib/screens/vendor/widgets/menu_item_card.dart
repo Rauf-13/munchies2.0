@@ -4,23 +4,89 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../models/menu_item.dart';
-import 'package:foodapp/providers/wellness_provider.dart';
+import '../../../providers/cart_provider.dart';
+import '../../../providers/wellness_provider.dart';
 
 class MenuItemCard extends StatelessWidget {
   final MenuItem menuItem;
   final VoidCallback onAddToCart;
+  final String vendorName;
 
   const MenuItemCard({
     super.key,
     required this.menuItem,
     required this.onAddToCart,
+    required this.vendorName,
   });
+
+  void _handleAddToCart(BuildContext context) {
+    final cart = context.read<CartProvider>();
+
+    if (cart.isFromDifferentVendor(menuItem.vendorId)) {
+      _showClearCartDialog(context, cart);
+    } else {
+      onAddToCart();
+    }
+  }
+
+  void _showClearCartDialog(BuildContext context, CartProvider cart) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Start a new order?',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF1A1A1A),
+          ),
+        ),
+        content: Text(
+          'Your cart has items from ${cart.vendorName ?? "another vendor"}. '
+          'Adding this item will clear your current cart.',
+          style: const TextStyle(
+            fontSize: 14,
+            color: Color(0xFF666666),
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'Keep current cart',
+              style: TextStyle(
+                color: Color(0xFF666666),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              cart.clearAndAdd(
+                menuItem,
+                vendorId: menuItem.vendorId,
+                vendorName: vendorName,
+              );
+            },
+            child: const Text(
+              'Start new order',
+              style: TextStyle(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final wellness = context.watch<WellnessProvider>();
-
-    // Build tag list from item name + tags for conflict detection
     final itemTags = [menuItem.name, ...menuItem.tags];
     final isConflicting = wellness.itemConflicts(itemTags);
 
@@ -34,7 +100,6 @@ class MenuItemCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Item name and price
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -65,7 +130,6 @@ class MenuItemCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
 
-                // Description
                 Text(
                   menuItem.description,
                   style: const TextStyle(
@@ -78,12 +142,10 @@ class MenuItemCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
 
-                // Tags row — includes conflict badge if needed
                 Wrap(
                   spacing: 8,
                   runSpacing: 6,
                   children: [
-                    // Conflict badge — first so it stands out
                     if (isConflicting)
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -118,7 +180,6 @@ class MenuItemCard extends StatelessWidget {
                         ),
                       ),
 
-                    // Regular tags
                     ...menuItem.tags.map((tag) {
                       return Container(
                         padding: const EdgeInsets.symmetric(
@@ -150,7 +211,6 @@ class MenuItemCard extends StatelessWidget {
           // Right side - Image and add button
           Stack(
             children: [
-              // Food image — slightly dimmed if conflicting
               Opacity(
                 opacity: isConflicting ? 0.5 : 1.0,
                 child: ClipRRect(
@@ -169,12 +229,11 @@ class MenuItemCard extends StatelessWidget {
                 ),
               ),
 
-              // Add to cart button — still tappable even if conflicting
               Positioned(
                 bottom: 6,
                 right: 6,
                 child: GestureDetector(
-                  onTap: onAddToCart,
+                  onTap: () => _handleAddToCart(context),
                   child: Container(
                     width: 32,
                     height: 32,
@@ -185,20 +244,17 @@ class MenuItemCard extends StatelessWidget {
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: (isConflicting
-                                  ? AppColors.textTertiary
-                                  : AppColors.primary)
-                              .withOpacity(0.4),
+                          color:
+                              (isConflicting
+                                      ? AppColors.textTertiary
+                                      : AppColors.primary)
+                                  .withOpacity(0.4),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.add,
-                      color: Colors.white,
-                      size: 20,
-                    ),
+                    child: const Icon(Icons.add, color: Colors.white, size: 20),
                   ),
                 ),
               ),

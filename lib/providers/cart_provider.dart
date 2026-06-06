@@ -1,3 +1,5 @@
+// lib/providers/cart_provider.dart
+
 import 'package:flutter/material.dart';
 import '../models/cart_item.dart';
 import '../models/menu_item.dart';
@@ -17,27 +19,35 @@ class CartProvider extends ChangeNotifier {
   bool get isEmpty => _items.isEmpty;
 
   double get subtotal => _items.fold(0, (sum, item) => sum + item.totalPrice);
-
   double get total => subtotal + deliveryFee + serviceFee;
 
-  void addItem(MenuItem menuItem, {String? vendorId, String? vendorName}) {
-    // If adding from a different vendor, clear cart first
-    if (_vendorId != null && vendorId != null && _vendorId != vendorId) {
-      _items.clear();
-    }
+  /// Returns true if the item is from a different vendor than what's in cart
+  bool isFromDifferentVendor(String? incomingVendorId) {
+    return _vendorId != null &&
+        incomingVendorId != null &&
+        _vendorId != incomingVendorId;
+  }
 
+  /// Normal add — same vendor or empty cart
+  void addItem(MenuItem menuItem, {String? vendorId, String? vendorName}) {
     _vendorId = vendorId;
     _vendorName = vendorName;
 
     final index = _items.indexWhere((item) => item.menuItem.id == menuItem.id);
-
     if (index >= 0) {
       _items[index].quantity++;
     } else {
       _items.add(CartItem(menuItem: menuItem));
     }
-
     notifyListeners();
+  }
+
+  /// Clears cart then adds the new item — called after user confirms dialog
+  void clearAndAdd(MenuItem menuItem, {String? vendorId, String? vendorName}) {
+    _items.clear();
+    _vendorId = null;
+    _vendorName = null;
+    addItem(menuItem, vendorId: vendorId, vendorName: vendorName);
   }
 
   void removeItem(String menuItemId) {

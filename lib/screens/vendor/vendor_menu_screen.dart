@@ -310,6 +310,7 @@ class _VendorMenuScreenState extends State<VendorMenuScreen> {
                   return MenuItemCard(
                     menuItem: item,
                     onAddToCart: () => _addToCart(item),
+                    vendorName: '',
                   );
                 }, childCount: filteredMenuItems.length),
               ),

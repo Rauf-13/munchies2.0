@@ -9,9 +9,11 @@ import 'providers/user_provider.dart';
 import 'providers/group_order_provider.dart';
 import 'providers/wellness_provider.dart';
 import 'screens/auth/splash_screen.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const MunchiesApp());
 }

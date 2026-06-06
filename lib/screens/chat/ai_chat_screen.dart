@@ -1,6 +1,14 @@
+// lib/screens/chat/ai_chat_screen.dart
+
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/dummy_menu_items.dart';
+import '../../providers/cart_provider.dart';
+import '../../providers/wellness_provider.dart';
 import 'widgets/message_bubble.dart';
 import 'widgets/suggestion_chip.dart';
 import 'widgets/food_suggestion_card.dart';
@@ -16,22 +24,120 @@ class _AIChatScreenState extends State<AIChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = [];
+  final List<Map<String, String>> _conversationHistory = [];
   bool _showTypingIndicator = false;
+
+  static const String _groqUrl =
+      'https://api.groq.com/openai/v1/chat/completions';
 
   @override
   void initState() {
     super.initState();
-    // Initial greeting
     _addBotMessage(
-      "Hey! 👋 I'm here to help you find delicious food. What are you craving today?",
+      "Hey! 👋 I'm NomNom, your AI food assistant. Tell me what you're craving and I'll find something great for you!",
       showChips: true,
     );
+  }
+
+  String _buildSystemPrompt() {
+    final wellness = context.read<WellnessProvider>();
+    final menuList = dummyMenuItems
+        .map(
+          (m) =>
+              '- ${m.name} (₦${m.price.toStringAsFixed(0)}): ${m.description}. Tags: ${m.tags.join(', ')}',
+        )
+        .join('\n');
+
+    String wellnessContext = '';
+    if (wellness.isEnabled && wellness.dietaryRestrictions.isNotEmpty) {
+      wellnessContext =
+          '\nUser dietary restrictions: ${wellness.dietaryRestrictions.join(', ')}. Avoid suggesting conflicting items.';
+    }
+
+    return '''You are NomNom, a friendly AI food ordering assistant for Munchies, a student food delivery app in Kano, Nigeria. 
+You help students find meals that match their cravings and budget.
+
+Available menu items:
+$menuList
+$wellnessContext
+
+Rules:
+- Keep responses short, friendly and conversational — max 2-3 sentences
+- Always suggest specific meals from the menu above by name
+- Mention prices in Naira (₦)
+- You understand Nigerian food culture and student budgets
+- If asked about something not on the menu, suggest the closest available option
+- Never make up menu items that aren't listed above
+- If the user mentions a budget, only suggest items within that budget''';
+  }
+
+  Future<void> _sendToGroq(String userMessage) async {
+    setState(() => _showTypingIndicator = true);
+
+    _conversationHistory.add({'role': 'user', 'content': userMessage});
+
+    try {
+      final apiKey = dotenv.env['GROQ_API_KEY'] ?? '';
+
+      final response = await http.post(
+        Uri.parse(_groqUrl),
+        headers: {
+          'Authorization': 'Bearer $apiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': 'llama3-8b-8192',
+          'messages': [
+            {'role': 'system', 'content': _buildSystemPrompt()},
+            ..._conversationHistory,
+          ],
+          'max_tokens': 200,
+          'temperature': 0.7,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final reply = data['choices'][0]['message']['content']
+            .toString()
+            .trim();
+
+        _conversationHistory.add({'role': 'assistant', 'content': reply});
+
+        setState(() => _showTypingIndicator = false);
+
+        // Check if reply mentions any menu items and show suggestion cards
+        final mentionedItems = dummyMenuItems
+            .where(
+              (item) => reply.toLowerCase().contains(item.name.toLowerCase()),
+            )
+            .take(2)
+            .toList();
+
+        _addBotMessage(
+          reply,
+          showSuggestions: mentionedItems.isNotEmpty,
+          suggestedItems: mentionedItems.map((e) => e.id).toList(),
+        );
+      } else {
+        setState(() => _showTypingIndicator = false);
+        _addBotMessage(
+          "Sorry, I'm having trouble connecting right now. Try again in a moment!",
+        );
+      }
+    } catch (e) {
+      setState(() => _showTypingIndicator = false);
+      _addBotMessage(
+        "Hmm, something went wrong. Check your connection and try again.",
+      );
+    }
   }
 
   void _addBotMessage(
     String message, {
     bool showChips = false,
     bool showSuggestions = false,
+    List<String> suggestedItems = const [],
   }) {
     setState(() {
       _messages.add(
@@ -40,6 +146,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           isUser: false,
           showChips: showChips,
           showSuggestions: showSuggestions,
+          suggestedItemIds: suggestedItems,
         ),
       );
     });
@@ -52,30 +159,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
       _messageController.clear();
     });
     _scrollToBottom();
-
-    // Simulate bot response
-    _simulateBotResponse(message);
-  }
-
-  void _simulateBotResponse(String userMessage) {
-    setState(() {
-      _showTypingIndicator = true;
-    });
-
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() {
-        _showTypingIndicator = false;
-      });
-
-      if (userMessage.toLowerCase().contains('spicy')) {
-        _addBotMessage(
-          "Perfect! I found some spicy options within your budget. Here are my top picks:",
-          showSuggestions: true,
-        );
-      } else {
-        _addBotMessage("Great choice! Let me find the best options for you...");
-      }
-    });
+    _sendToGroq(message);
   }
 
   void _scrollToBottom() {
@@ -88,10 +172,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
         );
       }
     });
-  }
-
-  void _handleChipTap(String chipText) {
-    _addUserMessage(chipText);
   }
 
   @override
@@ -150,14 +230,22 @@ class _AIChatScreenState extends State<AIChatScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.more_vert, color: AppColors.textPrimary),
-            onPressed: () {},
+            icon: const Icon(Icons.refresh, color: AppColors.textPrimary),
+            onPressed: () {
+              setState(() {
+                _messages.clear();
+                _conversationHistory.clear();
+              });
+              _addBotMessage(
+                "Hey! 👋 Fresh start! What are you craving today?",
+                showChips: true,
+              );
+            },
           ),
         ],
       ),
       body: Column(
         children: [
-          // Messages Area
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -177,8 +265,8 @@ class _AIChatScreenState extends State<AIChatScreen> {
                       isUser: message.isUser,
                     ),
 
-                    // Show chips after bot message
-                    if (message.showChips && !message.isUser) ...[
+                    // Quick reply chips after first message
+                    if (message.showChips && !message.isUser)
                       Padding(
                         padding: const EdgeInsets.only(
                           left: 60,
@@ -192,27 +280,37 @@ class _AIChatScreenState extends State<AIChatScreen> {
                             SuggestionChip(
                               emoji: '🌶️',
                               label: 'Spicy',
-                              onTap: () => _handleChipTap(
+                              onTap: () => _addUserMessage(
                                 'I want something spicy under ₦1500',
                               ),
                             ),
                             SuggestionChip(
                               emoji: '🍔',
                               label: 'Fast food',
-                              onTap: () => _handleChipTap('Fast food'),
+                              onTap: () =>
+                                  _addUserMessage('Show me fast food options'),
                             ),
                             SuggestionChip(
                               emoji: '🍛',
                               label: 'Local',
-                              onTap: () => _handleChipTap('Local cuisine'),
+                              onTap: () =>
+                                  _addUserMessage('I want local Nigerian food'),
+                            ),
+                            SuggestionChip(
+                              emoji: '💰',
+                              label: 'Budget',
+                              onTap: () => _addUserMessage(
+                                'What can I get under ₦1000?',
+                              ),
                             ),
                           ],
                         ),
                       ),
-                    ],
 
-                    // Show food suggestions
-                    if (message.showSuggestions && !message.isUser) ...[
+                    // Food suggestion cards when AI mentions menu items
+                    if (message.showSuggestions &&
+                        !message.isUser &&
+                        message.suggestedItemIds.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(
                           left: 60,
@@ -220,62 +318,33 @@ class _AIChatScreenState extends State<AIChatScreen> {
                           top: 12,
                         ),
                         child: Column(
-                          children: [
-                            ...dummyMenuItems.take(2).map((meal) {
-                              return FoodSuggestionCard(
-                                meal: meal,
-                                onAdd: () {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '${meal.name} added to cart!',
-                                      ),
-                                      duration: const Duration(seconds: 1),
-                                      backgroundColor: AppColors.success,
+                          children: message.suggestedItemIds.map((id) {
+                            final meal = dummyMenuItems.firstWhere(
+                              (m) => m.id == id,
+                              orElse: () => dummyMenuItems.first,
+                            );
+                            return FoodSuggestionCard(
+                              meal: meal,
+                              onAdd: () {
+                                context.read<CartProvider>().addItem(
+                                  meal,
+                                  vendorId: meal.vendorId,
+                                  vendorName: 'Vendor',
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      '${meal.name} added to cart!',
                                     ),
-                                  );
-                                },
-                              );
-                            }).toList(),
-
-                            // Bottom action chips
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Row(
-                                children: [
-                                  CircleAvatar(
-                                    radius: 20,
-                                    backgroundColor: const Color(0xFFFEF3C7),
-                                    child: const Text(
-                                      '🤖',
-                                      style: TextStyle(fontSize: 20),
-                                    ),
+                                    duration: const Duration(seconds: 1),
+                                    backgroundColor: AppColors.success,
                                   ),
-                                  const SizedBox(width: 12),
-                                  SuggestionChip(
-                                    emoji: '',
-                                    label: 'Show more',
-                                    onTap: () {},
-                                  ),
-                                  const SizedBox(width: 8),
-                                  SuggestionChip(
-                                    emoji: '⭐',
-                                    label: 'Top rated',
-                                    onTap: () {},
-                                  ),
-                                  const SizedBox(width: 8),
-                                  SuggestionChip(
-                                    emoji: '🚀',
-                                    label: 'Fas',
-                                    onTap: () {},
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
+                                );
+                              },
+                            );
+                          }).toList(),
                         ),
                       ),
-                    ],
                   ],
                 );
               },
@@ -293,23 +362,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
             ),
             child: Row(
               children: [
-                // Camera Icon
-                IconButton(
-                  icon: const Icon(Icons.camera_alt_outlined, size: 24),
-                  color: AppColors.textSecondary,
-                  onPressed: () {},
-                ),
-
-                // Microphone Icon
-                IconButton(
-                  icon: const Icon(Icons.mic_outlined, size: 24),
-                  color: AppColors.textSecondary,
-                  onPressed: () {},
-                ),
-
-                const SizedBox(width: 8),
-
-                // Text Input
                 Expanded(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -320,7 +372,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     child: TextField(
                       controller: _messageController,
                       decoration: const InputDecoration(
-                        hintText: 'Type your message...',
+                        hintText: 'Ask me anything about food...',
                         border: InputBorder.none,
                         hintStyle: TextStyle(
                           fontSize: 14,
@@ -335,10 +387,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                     ),
                   ),
                 ),
-
                 const SizedBox(width: 8),
-
-                // Send Button
                 GestureDetector(
                   onTap: () {
                     if (_messageController.text.trim().isNotEmpty) {
@@ -348,7 +397,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
                   child: Container(
                     width: 48,
                     height: 48,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
                     ),
@@ -421,9 +470,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
           ),
         );
       },
-      onEnd: () {
-        setState(() {});
-      },
+      onEnd: () => setState(() {}),
     );
   }
 
@@ -440,11 +487,13 @@ class ChatMessage {
   final bool isUser;
   final bool showChips;
   final bool showSuggestions;
+  final List<String> suggestedItemIds;
 
   ChatMessage({
     required this.text,
     required this.isUser,
     this.showChips = false,
     this.showSuggestions = false,
+    this.suggestedItemIds = const [],
   });
 }
