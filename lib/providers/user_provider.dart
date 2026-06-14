@@ -1,3 +1,5 @@
+// lib/providers/user_provider.dart
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,7 +20,7 @@ class UserProvider extends ChangeNotifier {
   bool get isVendor => _user?.isVendor ?? false;
   bool get isCustomer => _user?.isCustomer ?? true;
 
-  // ── SIGN UP ───────────────────────────────────────────────────
+  // ── SIGN UP ──
   Future<bool> signup({
     required String fullName,
     required String email,
@@ -39,12 +41,10 @@ class UserProvider extends ChangeNotifier {
         fullName: fullName.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        role: UserRole.customer, // role set after role selection screen
+        role: UserRole.customer,
       );
 
-      // Save to Firestore
       await _db.collection('users').doc(uid).set(newUser.toMap());
-
       _user = newUser;
       notifyListeners();
       return true;
@@ -57,11 +57,8 @@ class UserProvider extends ChangeNotifier {
     }
   }
 
-  // ── LOG IN ────────────────────────────────────────────────────
-  Future<bool> login({
-    required String email,
-    required String password,
-  }) async {
+  // ── LOG IN ──
+  Future<bool> login({required String email, required String password}) async {
     _setLoading(true);
     _error = null;
     try {
@@ -71,6 +68,7 @@ class UserProvider extends ChangeNotifier {
       );
 
       await _loadUserFromFirestore(credential.user!.uid);
+
       return true;
     } on FirebaseAuthException catch (e) {
       _error = _friendlyError(e.code);
@@ -81,14 +79,14 @@ class UserProvider extends ChangeNotifier {
     }
   }
 
-  // ── LOG OUT ───────────────────────────────────────────────────
+  // ── LOG OUT ──
   Future<void> logout() async {
     await _auth.signOut();
     _user = null;
     notifyListeners();
   }
 
-  // ── PERSIST AUTH (call on app start) ─────────────────────────
+  // ── PERSIST AUTH ──
   Future<void> checkAuthState() async {
     final firebaseUser = _auth.currentUser;
     if (firebaseUser != null) {
@@ -96,7 +94,7 @@ class UserProvider extends ChangeNotifier {
     }
   }
 
-  // ── UPDATE PROFILE ────────────────────────────────────────────
+  // ── UPDATE PROFILE ──
   Future<void> updateProfile({
     String? fullName,
     String? email,
@@ -113,7 +111,6 @@ class UserProvider extends ChangeNotifier {
       role: role,
     );
 
-    // Sync to Firestore
     await _db.collection('users').doc(_user!.id).update({
       if (fullName != null) 'fullName': fullName,
       if (email != null) 'email': email,
@@ -125,7 +122,7 @@ class UserProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── FORGOT PASSWORD ───────────────────────────────────────────
+  // ── FORGOT PASSWORD ──
   Future<bool> sendPasswordReset(String email) async {
     _setLoading(true);
     _error = null;
@@ -141,7 +138,7 @@ class UserProvider extends ChangeNotifier {
     }
   }
 
-  // ── INTERNAL ──────────────────────────────────────────────────
+  // ── INTERNAL ──
   Future<void> _loadUserFromFirestore(String uid) async {
     final doc = await _db.collection('users').doc(uid).get();
     if (doc.exists) {

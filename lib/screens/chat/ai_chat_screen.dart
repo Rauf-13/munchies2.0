@@ -1,14 +1,12 @@
 // lib/screens/chat/ai_chat_screen.dart
 
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/dummy_menu_items.dart';
 import '../../providers/cart_provider.dart';
 import '../../providers/wellness_provider.dart';
+import '../../models/menu_item.dart';
 import 'widgets/message_bubble.dart';
 import 'widgets/suggestion_chip.dart';
 import 'widgets/food_suggestion_card.dart';
@@ -24,11 +22,7 @@ class _AIChatScreenState extends State<AIChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = [];
-  final List<Map<String, String>> _conversationHistory = [];
   bool _showTypingIndicator = false;
-
-  static const String _groqUrl =
-      'https://api.groq.com/openai/v1/chat/completions';
 
   @override
   void initState() {
@@ -39,98 +33,250 @@ class _AIChatScreenState extends State<AIChatScreen> {
     );
   }
 
-  String _buildSystemPrompt() {
+  _BotResponse _generateResponse(String input) {
+    final msg = input.toLowerCase().trim();
     final wellness = context.read<WellnessProvider>();
-    final menuList = dummyMenuItems
-        .map(
-          (m) =>
-              '- ${m.name} (₦${m.price.toStringAsFixed(0)}): ${m.description}. Tags: ${m.tags.join(', ')}',
-        )
-        .join('\n');
 
-    String wellnessContext = '';
-    if (wellness.isEnabled && wellness.dietaryRestrictions.isNotEmpty) {
-      wellnessContext =
-          '\nUser dietary restrictions: ${wellness.dietaryRestrictions.join(', ')}. Avoid suggesting conflicting items.';
-    }
+    List<MenuItem> available = wellness.isEnabled
+        ? dummyMenuItems
+              .where((m) => !wellness.itemConflicts([m.name, ...m.tags]))
+              .toList()
+        : List.from(dummyMenuItems);
 
-    return '''You are NomNom, a friendly AI food ordering assistant for Munchies, a student food delivery app in Kano, Nigeria. 
-You help students find meals that match their cravings and budget.
-
-Available menu items:
-$menuList
-$wellnessContext
-
-Rules:
-- Keep responses short, friendly and conversational — max 2-3 sentences
-- Always suggest specific meals from the menu above by name
-- Mention prices in Naira (₦)
-- You understand Nigerian food culture and student budgets
-- If asked about something not on the menu, suggest the closest available option
-- Never make up menu items that aren't listed above
-- If the user mentions a budget, only suggest items within that budget''';
-  }
-
-  Future<void> _sendToGroq(String userMessage) async {
-    setState(() => _showTypingIndicator = true);
-
-    _conversationHistory.add({'role': 'user', 'content': userMessage});
-
-    try {
-      final apiKey = dotenv.env['GROQ_API_KEY'] ?? '';
-
-      final response = await http.post(
-        Uri.parse(_groqUrl),
-        headers: {
-          'Authorization': 'Bearer $apiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': 'llama3-8b-8192',
-          'messages': [
-            {'role': 'system', 'content': _buildSystemPrompt()},
-            ..._conversationHistory,
-          ],
-          'max_tokens': 200,
-          'temperature': 0.7,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final reply = data['choices'][0]['message']['content']
-            .toString()
-            .trim();
-
-        _conversationHistory.add({'role': 'assistant', 'content': reply});
-
-        setState(() => _showTypingIndicator = false);
-
-        // Check if reply mentions any menu items and show suggestion cards
-        final mentionedItems = dummyMenuItems
-            .where(
-              (item) => reply.toLowerCase().contains(item.name.toLowerCase()),
-            )
-            .take(2)
-            .toList();
-
-        _addBotMessage(
-          reply,
-          showSuggestions: mentionedItems.isNotEmpty,
-          suggestedItems: mentionedItems.map((e) => e.id).toList(),
-        );
-      } else {
-        setState(() => _showTypingIndicator = false);
-        _addBotMessage(
-          "Sorry, I'm having trouble connecting right now. Try again in a moment!",
+    // ── Budget ──
+    final budgetMatch = RegExp(r'(\d+)').firstMatch(msg);
+    if (msg.contains('budget') ||
+        msg.contains('cheap') ||
+        msg.contains('affordable') ||
+        msg.contains('under') ||
+        msg.contains('less than') ||
+        msg.contains('below')) {
+      int budget = 2000;
+      if (budgetMatch != null) {
+        budget = int.tryParse(budgetMatch.group(1)!) ?? 2000;
+      }
+      final affordable = available.where((m) => m.price <= budget).toList();
+      if (affordable.isEmpty) {
+        final cheapest = List<MenuItem>.from(available)
+          ..sort((a, b) => a.price.compareTo(b.price));
+        return _BotResponse(
+          "Nothing under ₦$budget right now, but our most affordable option is ${cheapest.first.name} at ₦${cheapest.first.price.toStringAsFixed(0)} — still great value! 💰",
+          cheapest.take(2).toList(),
         );
       }
-    } catch (e) {
-      setState(() => _showTypingIndicator = false);
-      _addBotMessage(
-        "Hmm, something went wrong. Check your connection and try again.",
+      affordable.sort((a, b) => a.price.compareTo(b.price));
+      return _BotResponse(
+        "Found ${affordable.length} options under ₦$budget! Here are the best value picks 💰",
+        affordable.take(2).toList(),
       );
     }
+
+    // ── Heavy / filling / starving ──
+    if (msg.contains('heavy') ||
+        msg.contains('filling') ||
+        msg.contains('starving') ||
+        msg.contains('very hungry') ||
+        msg.contains('so hungry') ||
+        msg.contains('pounded') ||
+        msg.contains('amala') ||
+        msg.contains('swallow')) {
+      final heavy = available
+          .where((m) => m.tags.any((t) => t.toLowerCase().contains('heavy')))
+          .toList();
+      final picks = heavy.isNotEmpty ? heavy : available.take(2).toList();
+      return _BotResponse(
+        "You need something serious! 😤 These heavy meals will sort you out:",
+        picks,
+      );
+    }
+
+    // ── Rice ──
+    if (msg.contains('rice') ||
+        msg.contains('jollof') ||
+        msg.contains('fried rice') ||
+        msg.contains('ofada')) {
+      final rice = available
+          .where(
+            (m) =>
+                m.category.toLowerCase().contains('rice') ||
+                m.name.toLowerCase().contains('rice'),
+          )
+          .toList();
+      return _BotResponse(
+        "Rice lover! 🍚 Here's what we've got:",
+        rice.take(2).toList(),
+      );
+    }
+
+    // ── Local / Nigerian ──
+    if (msg.contains('local') ||
+        msg.contains('nigerian') ||
+        msg.contains('naija') ||
+        msg.contains('egusi') ||
+        msg.contains('beans') ||
+        msg.contains('plantain') ||
+        msg.contains('dodo')) {
+      final local = available
+          .where(
+            (m) =>
+                m.category.toLowerCase().contains('swallow') ||
+                m.category.toLowerCase().contains('popular') ||
+                m.name.toLowerCase().contains('amala') ||
+                m.name.toLowerCase().contains('beans') ||
+                m.name.toLowerCase().contains('ofada'),
+          )
+          .toList();
+      final picks = local.isNotEmpty ? local : available.take(2).toList();
+      return _BotResponse(
+        "Nothing beats good Naija food! 🍛 Here's what I'd recommend:",
+        picks,
+      );
+    }
+
+    // ── Best seller / popular / recommended ──
+    if (msg.contains('popular') ||
+        msg.contains('best') ||
+        msg.contains('top') ||
+        msg.contains('recommended') ||
+        msg.contains('favourite') ||
+        msg.contains('favorite')) {
+      final popular = available
+          .where(
+            (m) => m.tags.any(
+              (t) =>
+                  t.toLowerCase().contains('best seller') ||
+                  t.toLowerCase().contains('popular'),
+            ),
+          )
+          .toList();
+      final picks = popular.isNotEmpty ? popular : available.take(2).toList();
+      return _BotResponse(
+        "These are our most loved meals right now ⭐ Students keep coming back for these:",
+        picks,
+      );
+    }
+
+    // ── Student special ──
+    if (msg.contains('student') ||
+        msg.contains('school') ||
+        msg.contains('lecture') ||
+        msg.contains('broke')) {
+      final student = available
+          .where(
+            (m) => m.tags.any(
+              (t) =>
+                  t.toLowerCase().contains('student') ||
+                  t.toLowerCase().contains('budget'),
+            ),
+          )
+          .toList();
+      final picks = student.isNotEmpty ? student : available.take(2).toList();
+      return _BotResponse(
+        "I got you, student life is real 😅 Here are the best value meals on campus:",
+        picks,
+      );
+    }
+
+    // ── Protein / meat / chicken / turkey ──
+    if (msg.contains('protein') ||
+        msg.contains('meat') ||
+        msg.contains('chicken') ||
+        msg.contains('turkey') ||
+        msg.contains('fish') ||
+        msg.contains('beef')) {
+      final protein = available
+          .where(
+            (m) =>
+                m.tags.any((t) => t.toLowerCase().contains('protein')) ||
+                m.name.toLowerCase().contains('turkey') ||
+                m.name.toLowerCase().contains('chicken') ||
+                m.description.toLowerCase().contains('chicken') ||
+                m.description.toLowerCase().contains('turkey'),
+          )
+          .toList();
+      final picks = protein.isNotEmpty ? protein : available.take(2).toList();
+      return _BotResponse(
+        "Need that protein hit! 💪 These meals come loaded with meat:",
+        picks,
+      );
+    }
+
+    // ── Greetings ──
+    if (msg == 'hi' ||
+        msg == 'hello' ||
+        msg == 'hey' ||
+        msg == 'yo' ||
+        msg == 'sup' ||
+        msg.contains('good morning') ||
+        msg.contains('good afternoon') ||
+        msg.contains('good evening')) {
+      return _BotResponse(
+        "Hey! 👋 Great to see you. Are you in the mood for something local, rice, swallow, or are you on a budget today?",
+        [],
+        showChips: true,
+      );
+    }
+
+    // ── Thanks ──
+    if (msg.contains('thank') ||
+        msg.contains('nice') ||
+        msg.contains('great')) {
+      return _BotResponse(
+        "You're welcome! 😊 Enjoy your meal — tap the + on any card to add it to your cart!",
+        [],
+      );
+    }
+
+    // ── Show menu / what do you have ──
+    if (msg.contains('menu') ||
+        msg.contains('options') ||
+        msg.contains('what do you have') ||
+        msg.contains('show me') ||
+        msg.contains('what can')) {
+      return _BotResponse(
+        "Here's a taste of what's available today 😋 We've got rice meals, swallow, and some great budget picks:",
+        available.take(2).toList(),
+      );
+    }
+
+    // ── Default — show best sellers ──
+    final bestSellers = available
+        .where(
+          (m) => m.tags.any(
+            (t) =>
+                t.toLowerCase().contains('best seller') ||
+                t.toLowerCase().contains('popular'),
+          ),
+        )
+        .toList();
+    final picks = bestSellers.isNotEmpty
+        ? bestSellers
+        : available.take(2).toList();
+    return _BotResponse(
+      "Let me suggest some of our most popular options right now 🍽️",
+      picks,
+    );
+  }
+
+  void _simulateBotResponse(String userMessage) {
+    setState(() => _showTypingIndicator = true);
+
+    final delay = Duration(
+      milliseconds: 1000 + (userMessage.length * 10).clamp(0, 800),
+    );
+
+    Future.delayed(delay, () {
+      if (!mounted) return;
+      setState(() => _showTypingIndicator = false);
+
+      final response = _generateResponse(userMessage);
+      _addBotMessage(
+        response.text,
+        showSuggestions: response.items.isNotEmpty,
+        suggestedItems: response.items.map((m) => m.id).toList(),
+        showChips: response.showChips,
+      );
+    });
   }
 
   void _addBotMessage(
@@ -159,7 +305,7 @@ Rules:
       _messageController.clear();
     });
     _scrollToBottom();
-    _sendToGroq(message);
+    _simulateBotResponse(message);
   }
 
   void _scrollToBottom() {
@@ -232,10 +378,7 @@ Rules:
           IconButton(
             icon: const Icon(Icons.refresh, color: AppColors.textPrimary),
             onPressed: () {
-              setState(() {
-                _messages.clear();
-                _conversationHistory.clear();
-              });
+              setState(() => _messages.clear());
               _addBotMessage(
                 "Hey! 👋 Fresh start! What are you craving today?",
                 showChips: true,
@@ -265,7 +408,6 @@ Rules:
                       isUser: message.isUser,
                     ),
 
-                    // Quick reply chips after first message
                     if (message.showChips && !message.isUser)
                       Padding(
                         padding: const EdgeInsets.only(
@@ -278,36 +420,35 @@ Rules:
                           runSpacing: 8,
                           children: [
                             SuggestionChip(
-                              emoji: '🌶️',
-                              label: 'Spicy',
-                              onTap: () => _addUserMessage(
-                                'I want something spicy under ₦1500',
-                              ),
-                            ),
-                            SuggestionChip(
-                              emoji: '🍔',
-                              label: 'Fast food',
+                              emoji: '🍚',
+                              label: 'Rice meals',
                               onTap: () =>
-                                  _addUserMessage('Show me fast food options'),
+                                  _addUserMessage('Show me rice options'),
                             ),
                             SuggestionChip(
                               emoji: '🍛',
-                              label: 'Local',
+                              label: 'Local food',
                               onTap: () =>
                                   _addUserMessage('I want local Nigerian food'),
+                            ),
+                            SuggestionChip(
+                              emoji: '😤',
+                              label: 'Heavy meal',
+                              onTap: () => _addUserMessage(
+                                'I need something heavy and filling',
+                              ),
                             ),
                             SuggestionChip(
                               emoji: '💰',
                               label: 'Budget',
                               onTap: () => _addUserMessage(
-                                'What can I get under ₦1000?',
+                                'What can I get under ₦2000?',
                               ),
                             ),
                           ],
                         ),
                       ),
 
-                    // Food suggestion cards when AI mentions menu items
                     if (message.showSuggestions &&
                         !message.isUser &&
                         message.suggestedItemIds.isNotEmpty)
@@ -351,7 +492,6 @@ Rules:
             ),
           ),
 
-          // Input Area
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
@@ -480,6 +620,14 @@ Rules:
     _scrollController.dispose();
     super.dispose();
   }
+}
+
+class _BotResponse {
+  final String text;
+  final List<MenuItem> items;
+  final bool showChips;
+
+  _BotResponse(this.text, this.items, {this.showChips = false});
 }
 
 class ChatMessage {

@@ -1,5 +1,8 @@
+// lib/screens/checkout/checkout_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_paystack/flutter_paystack.dart';
 import '../../core/constants/app_colors.dart';
 import '../../providers/cart_provider.dart';
 import '../../providers/user_provider.dart';
@@ -20,28 +23,104 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   String _selectedPayment = 'card';
   bool _isPlacingOrder = false;
 
+  // ── Replace with your real pk_test_ key before demo ──
+  static const String _paystackPublicKey = 'pk_test_REPLACE_ME';
+
+  final _plugin = PaystackPlugin();
+
   static const _scaffoldBg = Color(0xFFF5F5F5);
 
+  @override
+  void initState() {
+    super.initState();
+    _plugin.initialize(publicKey: _paystackPublicKey);
+  }
+
+  String _generateReference() {
+    return 'NOM${DateTime.now().millisecondsSinceEpoch}';
+  }
+
   Future<void> _placeOrder(CartProvider cart) async {
+    if (_selectedPayment == 'card' || _selectedPayment == 'transfer') {
+      await _initiatePaystackPayment(cart);
+    } else {
+      // Cash on delivery — skip payment gateway
+      await _completeOrder(cart);
+    }
+  }
+
+  Future<void> _initiatePaystackPayment(CartProvider cart) async {
+    final user = context.read<UserProvider>().user;
+    final email = user?.email ?? 'customer@munchies.app';
+    final amountInKobo = (cart.total * 100).toInt();
+    final reference = _generateReference();
+
+    Charge charge = Charge()
+      ..amount = amountInKobo
+      ..reference = reference
+      ..email = email
+      ..currency = 'NGN'
+      ..putMetaData('vendor', cart.vendorName ?? 'Vendor')
+      ..putMetaData('app', 'Munchies');
+
     setState(() => _isPlacingOrder = true);
 
-    // Simulate network delay — replace with real API call later
-    await Future.delayed(const Duration(seconds: 2));
+    try {
+      CheckoutResponse response = await _plugin.checkout(
+        context,
+        method: _selectedPayment == 'transfer'
+            ? CheckoutMethod.bank
+            : CheckoutMethod.card,
+        charge: charge,
+        fullscreen: false,
+        logo: const Text('🍽️', style: TextStyle(fontSize: 28)),
+      );
 
-    if (!mounted) return;
+      if (!mounted) return;
+
+      if (response.status == true) {
+        await _completeOrder(cart);
+      } else {
+        setState(() => _isPlacingOrder = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(response.message ?? 'Payment was not completed.'),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isPlacingOrder = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Payment failed. Please try again.'),
+          backgroundColor: AppColors.error,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  Future<void> _completeOrder(CartProvider cart) async {
+    final orderId =
+        'NOM${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+    final vendorName = cart.vendorName ?? 'Vendor';
+    final orderTotal = cart.total;
 
     cart.clear();
     setState(() => _isPlacingOrder = false);
 
-    // Replace the showDialog block inside _placeOrder with:
+    if (!mounted) return;
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
         builder: (_) => OrderTrackingScreen(
-          orderId:
-              'NOM${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
-          vendorName: cart.vendorName ?? 'Vendor',
-          orderTotal: cart.total,
+          orderId: orderId,
+          vendorName: vendorName,
+          orderTotal: orderTotal,
         ),
       ),
     );
@@ -66,7 +145,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   children: [
                     const SizedBox(height: 16),
 
-                    // Section: Delivery
                     _sectionLabel('Delivery Address'),
                     const SizedBox(height: 10),
                     DeliveryAddressCard(
@@ -84,14 +162,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
                     const SizedBox(height: 24),
 
-                    // Section: Order Items
                     _sectionLabel('Order Summary'),
                     const SizedBox(height: 10),
                     _buildOrderItems(cart),
 
                     const SizedBox(height: 24),
 
-                    // Section: Payment
                     _sectionLabel('Payment Method'),
                     const SizedBox(height: 10),
                     PaymentMethodCard(
@@ -102,7 +178,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
                     const SizedBox(height: 24),
 
-                    // Section: Price Breakdown
                     _sectionLabel('Price Breakdown'),
                     const SizedBox(height: 10),
                     const CartSummary(),
@@ -192,7 +267,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       ),
       child: Column(
         children: [
-          // Vendor name row
           if (cart.vendorName != null) ...[
             Row(
               children: [
@@ -214,7 +288,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ),
             const Divider(height: 20, color: Color(0xFFF0F0F0)),
           ],
-          // Item rows
           ...cart.items.map(
             (item) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -316,9 +389,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               : Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Place Order',
-                      style: TextStyle(
+                    Text(
+                      _selectedPayment == 'cash' ? 'Place Order' : 'Pay Now',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                       ),
